@@ -1,0 +1,51 @@
+#+title: An Emacs Major-Mode for Many-Core Levels
+
+* Introduction
+
+
+[[https://github.com/JungleComputing/mcl][Many-Core Levels]] (MCL) is a framework that allows one to write
+computational kernels for different kinds of many-core hardware. It
+consists of two languages: a hardware description language HDL and a
+programming language MCPL.  This Emacs major mode for MCPL provides
+syntax highlighting, formatting, and MCL-specific functions such as
+translating between abstraction levels.
+
+* Installation
+
+To install this Emacs major mode, clone the git repository in the
+Emacs resource directory:
+
+#+begin_src sh
+cd .emacs.d/
+git clone https://github.com/JungleComputing/mcl-mode.git
+#+end_src
+
+This will create a directory ~mcl-mode~ that contains the file
+~/mcl-mode.org~.  This file can be opened in Emacs and tangled with
+the command: ~org-babel-tangle~.  This will result in the file
+~mcl-mode.el~.  This file can be loaded in Emacs with the following
+code that we can add to ~.emacs~.  We will use the package
+~use-package~ to load it:
+
+in which we use the package ~use-package~:
+
+#+begin_src emacs-lisp
+(eval-and-compile
+  (package-initialize)
+  (unless (package-installed-p 'use-package)
+    (package-refresh-contents)
+    (package-install 'use-package)))
+
+(use-package mcl-mode
+  :load-path "mcl-mode/")
+#+end_src
+
+* License
+
+The MCL-mode is licensed under the Apache license.
+
+* Copyright
+
+Copyright 2018 Pieter Hijma
+
+

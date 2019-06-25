@@ -1,0 +1,374 @@
+#+begin_src emacs-lisp :exports none :noweb-ref mcl
+;;;; Copyright 2019 Pieter Hijma
+;;;;
+;;;; Licensed under the Apache License, Version 2.0 (the "License");
+;;;; you may not use this file except in compliance with the License.
+;;;; You may obtain a copy of the License at
+;;;;
+;;;;     http://www.apache.org/licenses/LICENSE-2.0
+;;;;
+;;;; Unless required by applicable law or agreed to in writing, software
+;;;; distributed under the License is distributed on an "AS IS" BASIS,
+;;;; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+;;;; See the License for the specific language governing permissions and
+;;;; limitations under the License.
+#+end_src
+
+
+#+title: An Emacs Major-Mode for Many-Core Levels
+#+author: Pieter Hijma
+
+# exporting
+#+begin_src emacs-lisp :exports none :results output silent
+  (org-html-export-as-html)
+  (write-file "html/main.html")
+  (kill-buffer)
+#+end_src
+
+* Introduction
+
+In this document we will describe a major-mode for Many-Core Levels for use in
+Emacs.  We are basing it on the ~c-mode~ in ~CC-mode~.
+
+* Initialization
+
+Since we rely on ~CC-mode~ we have to initialize it.  We then make our
+mode known to the language constant system.  We use C as a fallback
+for the constants that do not have to be changed.  Since constants are
+evaluated at compile-time, we have to make it available at
+compile-time.
+
+#+begin_src elisp :noweb-ref mcl
+(require 'cc-mode)
+
+(eval-when-compile
+  (require 'cc-langs)
+  (require 'cc-fonts))
+
+(eval-and-compile
+  (c-add-language 'mcl-mode 'c-mode))
+#+end_src
+
+* Language constants
+
+In this section we set up the language constants, such as keywords.  We use a
+macro that defines constants and modifies them from the original constants.  For
+example, to add a ~foreach~ in a similar way as a ~for~-statement, we look up
+how ~for~ is defined in ~cc-langs.el~.  It turns out that this keyword is
+defined in ~c-block-stmt-2-kwds~.  We add MCL to this datastructure and add
+~foreach~ to the list.
+
+#+begin_src elisp :noweb-ref mcl
+(c-lang-defconst c-block-stmt-2-kwds
+  "Statement keywords followed by a paren sexp and then by a substatement."
+  mcl (append '("foreach")
+	      (delete "switch"
+		      (append (c-lang-const c-block-stmt-2-kwds) nil))))
+
+(c-lang-defconst c-ref-list-kwds
+  "Keywords that can start or prefix any declaration level construct."
+  mcl '("import" "module"))
+
+(c-lang-defconst c-paren-type-kwds
+  "Keywords that may be followed by a parenthesis expression containing 
+type identifiers separated by arbitrary tokens."
+  mcl '("in"))
+
+(c-lang-defconst c-typedef-kwds
+  "Prefix keywords like \"typedef\" which make a type declaration
+  out of a variable declaration."
+  mcl (append '("type")
+	      (delete "typedef"
+		      (append (c-lang-const c-typedef-kwds)))))
+
+(c-lang-defconst c-opt-type-suffix-key
+  "A regex for things after a type."
+  mcl "\\(\\[[^\\]*?\\]\\)")
+;; Sum(a, b) c; does not work???    mcl "\\(\\[[^\\]*?\\]\\)\\|\\(([^)]*?)\\)")
+
+(c-lang-defconst c-simple-stmt-kwds
+  "Statement keywords followed by an expression or nothing."
+  mcl '("return" "barrier"))
+
+(c-lang-defconst c-modifier-kwds
+  "Keywords that can prefix normal declarations of identifiers
+(and typically act as flags).  Things like argument declarations
+inside function headers are also considered declarations in this
+sense."
+  mcl '("as"))  
+#+end_src
+
+Later in the code we need to execute the function ~c-init-language-vars~ to
+make it available to the system.
+
+* Syntax table
+
+The syntax table is easy to set up using CC-mode.  To actually use the MCL
+mode, it is necessary to define some constants for the ~font-lock~ system.
+
+#+begin_src elisp :noweb-ref mcl
+(defvar mcl-mode-syntax-table
+  (funcall (c-lang-const c-make-mode-syntax-table mcl))
+  "Syntax table used in mcl-mode buffers.")
+
+(defcustom mcl-font-lock-extra-types nil
+  "*List of extra types (aside from the type keywords) to recognize in MCL 
+mode. Each list item should be a regexp matching a single identifier.")
+
+(defconst mcl-font-lock-keywords-1 (c-lang-const c-matchers-1 mcl)
+  "Minimal highlighting for MCL mode.")
+
+(defconst mcl-font-lock-keywords-2 (c-lang-const c-matchers-2 mcl)
+  "Fast normal highlighting for MCL mode.")
+
+(defconst mcl-font-lock-keywords-3 (c-lang-const c-matchers-3 mcl)
+  "Accurate normal highlighting for MCL mode.")
+
+(defvar mcl-font-lock-keywords mcl-font-lock-keywords-3
+  "Default expressions to highlight in MCL mode.")
+#+end_src
+
+* Style
+
+The default indenting style does not suit MCL.  Therefore, the following code
+modifies the style for arguments:
+
+#+begin_src elisp :noweb-ref mcl
+(defconst mcl-style
+  '((c-basic-offset . 4)
+    (c-offsets-alist . ((arglist-cont-nonempty . ++))))
+  "MCL Programming Style")
+(c-add-style "MCL" mcl-style)
+(customize-set-variable 'c-default-style (quote ((mcl-mode . "mcl") (awk-mode . "awk") (other . "gnu"))))
+#+end_src
+
+* Commands
+
+In this section we define useful commands.  We first define a command
+to print the MCL version.
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-version ()
+  (interactive)
+  (message (run-mcl "-v")))
+#+end_src
+
+We then define a function to translate files to a different hardware
+description.
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-translate (hwd)
+  (interactive
+   (list
+    (when (mcl-translate-possible?)
+      (completing-read "Hardware description: " (mcl-get-hwds)))))
+  (let ((buffer-name (format "*translate to %s*" hwd)))
+    (call-process "mcl" nil
+		  buffer-name
+		  nil
+		  "translate" "-hwd" hwd "--" (buffer-file-name))
+    (let ((buffer (get-buffer buffer-name)))
+      (with-current-buffer buffer
+	(mcl-mode))
+      (pop-to-buffer buffer))))
+#+end_src 
+
+Generating C++ code:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-gen-cpp (target entry-funcs)
+  (interactive
+   (when (mcl-gen-cpp-possible?)
+     (list
+      (completing-read "Target: " (mcl-get-targets))
+      (completing-read "Entry funcs: " nil))))
+  (let ((result (process-exit-code-and-output "mcl" "gen-cpp" "-t" target "-e" entry-funcs "--" (buffer-file-name))))
+    (message (second result))
+    (if (= (first result) 0)
+	(message "Generated C++ code")
+      (message "Failed to generate C++ code")))) 
+#+end_src
+
+** Helper functions
+
+Removing newlines from the result of a command:
+
+#+begin_src elisp :noweb-ref mcl
+(defun remove-newlines (string)
+  (replace-regexp-in-string "\n$" "" string))
+#+end_src
+
+#+begin_src elisp :noweb-ref mcl
+(defun process-exit-code-and-output (program &rest args)
+  "Run PROGRAM with ARGS and return the exit code and output in a list."
+  (with-temp-buffer 
+    (list (apply 'call-process program nil (current-buffer) nil args)
+          (buffer-string))))
+
+(defun mcl-available? ()
+  (= (first (process-exit-code-and-output "which" "mcl")) 0))
+#+end_src
+
+Running MCL:
+
+#+begin_src elisp :noweb-ref mcl
+(defun run-mcl (arg)
+  (when (mcl-available?)
+    (remove-newlines (shell-command-to-string (format "mcl %s" arg)))))
+#+end_src
+
+
+Retrieving hardware descriptions:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-get-hwds ()
+  (split-string (run-mcl "list-hwd")))
+#+end_src
+
+Retrieving the targets:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-get-targets ()
+  (split-string (run-mcl "list-targets")))
+#+end_src
+
+Retrieving the package:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-package ()
+  ;; package
+  ;; a space or newline
+  ;; a // comment to the end of line
+  ;; a /* */ comment over lines
+  ;; there needs to be at least 1 space and comments
+  ;; then a qualified identifier using a-z and _ characters
+  (save-excursion
+    (beginning-of-buffer)
+    (if (search-forward-regexp "package\\([[:space:]\n]\\|//.*$\\|/\\*\\(.\\|\n\\)*\\*/\\)+\\([a-z_]+\\(\\.[a-z_]+\\)*\\)" nil t 1)
+	(match-string 3)
+      "unkown")))
+#+end_src
+
+Whether we can translate:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-translate-possible? ()
+  (if (mcl-available?)
+      (let ((buffer (current-buffer)))
+	(if (and (buffer-live-p buffer)
+		 (buffer-modified-p buffer)
+		 (not (buffer-base-buffer buffer)))
+	    (if (y-or-n-p (if (buffer-file-name buffer)
+			      (format "Save file %s? "
+				      (buffer-file-name buffer))
+			    (format "Save buffer %s? "
+				    (buffer-name buffer))))
+		(progn 
+		  (save-buffer)
+		  t)
+	      (error "Buffer needs to be saved"))
+	  t))
+    (error "mcl is not in the PATH")))
+#+end_src
+
+Whether we can generate C++ code:
+
+#+begin_src elisp :noweb-ref mcl
+(defun mcl-gen-cpp-possible? ()
+  (and (mcl-translate-possible?)
+       (if (getenv "MCL_OUTPUT_DIR")
+	   t
+	 (error "Environment variable MCL_OUTPUT_DIR is not defined"))))
+#+end_src
+
+* Menu
+
+In this section we define a menu and bindings.
+
+#+begin_src elisp :noweb-ref mcl
+(defvar mcl-mode-map ()
+  "Keymap used in MCL-mode buffers.")
+
+(if mcl-mode-map
+    nil
+  (setq mcl-mode-map (c-make-inherited-keymap))
+  ;; add bindings which are only useful for MCL
+  )
+
+(defun create-translate-list ()
+  (mapcar (lambda (x) `[,x (mcl-translate ,x)]) (mcl-get-hwds)))
+
+(defun create-translate-menu ()
+  (if (mcl-available?)
+      `("Translate" ,@(create-translate-list))
+    '["Translate" mcl-translate nil]))
+  
+
+(c-lang-defconst mcl-mode-menu
+  ;; The definition for the mode menu.  The menu title is prepended to
+  ;; this before it's fed to `easy-menu-define'.
+  t `(,(create-translate-menu)
+      ["Comment Out Region"     comment-region
+       (c-fn-region-is-active-p)]
+      ["Uncomment Region"       (comment-region (region-beginning)
+						(region-end) '(4))
+       (c-fn-region-is-active-p)]
+      ["Indent Expression"      c-indent-exp
+       (memq (char-after) '(?\( ?\[ ?\{))]
+      ["Indent Line or Region"  c-indent-line-or-region t]
+      ["Fill Comment Paragraph" c-fill-paragraph t]
+      "----"
+      ["Backward Statement"     c-beginning-of-statement t]
+      ["Forward Statement"      c-end-of-statement t]
+      "----"
+      ("Toggle..."
+       ["Syntactic indentation" c-toggle-syntactic-indentation
+	:style toggle :selected c-syntactic-indentation]
+       ["Electric mode"         c-toggle-electric-state
+	:style toggle :selected c-electric-flag]
+       ["Auto newline"          c-toggle-auto-newline
+	:style toggle :selected c-auto-newline]
+       ["Hungry delete"         c-toggle-hungry-state
+	:style toggle :selected c-hungry-delete-key]
+       ["Subword mode"          c-subword-mode
+	:style toggle :selected (and (boundp 'c-subword-mode)
+                                     c-subword-mode)])))
+
+(easy-menu-define c-mcl-menu mcl-mode-map "MCL Mode Commands"
+  (cons "MCL" (c-lang-const mcl-mode-menu mcl)))
+#+end_src
+
+
+* Setting up the major mode
+
+The following code creates a module for Emacs, creates a new derived mode based
+on ~c-mode~.  We first initialize CC-mode, then set the syntax table.  We then
+initialize the language constants that we have defined above.  Finally, we
+initialize the MCL mode.  For this final part it is necessary to have defined
+several font-lock constants which happened in the previous section.
+
+#+begin_src elisp :noweb-ref mcl
+(define-derived-mode mcl-mode c-mode "MCL"
+  "Major mode for Many-Core Levels"
+  
+  (c-initialize-cc-mode t)
+  (set-syntax-table mcl-mode-syntax-table)
+  (c-init-language-vars mcl-mode)
+  (c-set-style "mcl")
+  (c-common-init 'mcl-mode)
+  (setq mode-name (format  "MCL [%s]" (mcl-package))))
+#+end_src
+
+In the final parts we make sure that ~.mcl~ files are triggered to start in
+MCL-mode and that Emacs knows that this file provides MCL mode.
+
+#+begin_src elisp :noweb-ref mcl
+(add-to-list 'auto-mode-alist '("\\.mcl\\'" . mcl-mode))
+
+(provide 'mcl-mode)
+#+end_src
+
+
+#+begin_src elisp :noweb yes :tangle "mcl-mode.el" :exports none
+<<mcl>>
+#+end_src
